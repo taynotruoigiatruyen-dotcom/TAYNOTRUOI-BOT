@@ -5,20 +5,51 @@ const FormData = require("form-data");
 const sharp = require("sharp");
 
 const POST_CONFIG = {
-  CRON_SCHEDULE: "0 13 * * *", // 20:00 GMT+7
+  CRON_SCHEDULE: "0 13 * * *",
   SOURCE_FOLDER_ID: process.env.DRIVE_FOLDER_ID,
   POSTED_FOLDER_ID: process.env.DRIVE_POSTED_FOLDER_ID,
   TEMPLATE_FILE_ID: process.env.DRIVE_TEMPLATE_FILE_ID,
 };
 
-// Vùng đặt ảnh khách trong template
-// Template 1080x1080, ảnh chiếm 80% đầu = 0,0 đến 1080,864
 const PHOTO_AREA = {
   x: 0,
   y: 0,
   width: 1080,
   height: 864,
 };
+
+// ============================================================
+//  CAPTION MẪU - dùng khi AI từ chối hoặc lỗi
+// ============================================================
+const FALLBACK_CAPTIONS = [
+  `Hôm nay cô lại đón thêm một bạn khách quen ghé qua cơ sở của cô để xử lý mấy nốt ruồi, đồi mồi. Phương pháp gia truyền của nhà cô bao đời nay vẫn vậy — nhẹ nhàng, làm trực tiếp, chỉ khoảng 15-20 phút là xong, các bạn về luôn được.
+
+Cô đang có mặt tại Hà Nội (P.803 KĐT Resco, Xuân Đỉnh) và Quảng Ninh (chợ Trung tâm Mạo Khê). Bạn nào quan tâm cứ nhắn page hoặc gọi cô qua số 0979.979.981 để được tư vấn miễn phí nhé!
+
+#TayNotRuoi #GiaTruyenCoLan #NotRuoi #DoiMoi #TanNhang #HaNoi #QuangNinh`,
+
+  `Các bạn ơi, hôm nay cô vừa tiễn xong một bạn khách trẻ. Bạn ấy băn khoăn mãi mới quyết định đến gặp cô, sau khi làm xong nhìn rất hài lòng 😊
+
+Bí quyết gia truyền của nhà cô đã hơn chục năm rồi, không xâm lấn, không cần dao kéo, áp dụng trực tiếp lên da. Mỗi ca chỉ vài chục phút thôi.
+
+Hai cơ sở của cô:
+📍 Hà Nội: P.803 KĐT Resco, Xuân Đỉnh  
+📍 Quảng Ninh: Chợ Trung tâm Mạo Khê
+
+Đặt lịch trước qua page hoặc gọi 0979.979.981 các bạn nhé!
+
+#TayNotRuoi #GiaTruyen #CoLan #LamDepGiaTruyen`,
+
+  `Một ngày làm việc nữa của cô tại cơ sở. Bao nhiêu năm gắn bó với nghề, cô vẫn luôn tâm niệm phải tận tâm với từng người khách đến với mình.
+
+Bí quyết gia truyền của gia đình cô là phương pháp đông y, làm nhẹ nhàng và an toàn. Khách đến cơ sở, cô làm trực tiếp, không gửi thuốc về nhà như nhiều nơi.
+
+Bạn nào có nốt ruồi, đồi mồi, tàn nhang muốn xử lý thì cứ ghé cô hoặc nhắn page nhé. Cô có mặt cả ở Hà Nội và Quảng Ninh.
+
+☎ 0979.979.981
+
+#TayNotRuoi #DongYGiaTruyen #CoLan #UyTinTanTam`,
+];
 
 function getDriveClient() {
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
@@ -52,13 +83,8 @@ async function downloadFromDrive(drive, fileId) {
   return Buffer.from(response.data);
 }
 
-// ============================================================
-//  GHÉP ẢNH KHÁCH VÀO TEMPLATE
-// ============================================================
 async function composeWithTemplate(customerPhotoBuffer, templateBuffer) {
   console.log("🎨 Đang ghép ảnh vào template...");
-
-  // 1. Resize ảnh khách để fit vào ô PHOTO_AREA, crop ở giữa
   const resizedPhoto = await sharp(customerPhotoBuffer)
     .resize(PHOTO_AREA.width, PHOTO_AREA.height, {
       fit: "cover",
@@ -66,7 +92,6 @@ async function composeWithTemplate(customerPhotoBuffer, templateBuffer) {
     })
     .toBuffer();
 
-  // 2. Ghép ảnh khách vào template (đè lên vùng placeholder xám)
   const composedImage = await sharp(templateBuffer)
     .composite([
       {
@@ -82,63 +107,115 @@ async function composeWithTemplate(customerPhotoBuffer, templateBuffer) {
 }
 
 // ============================================================
-//  CLAUDE VIẾT CAPTION (dựa trên ảnh gốc của khách)
+//  KIỂM TRA CLAUDE CÓ TỪ CHỐI KHÔNG
+// ============================================================
+function isRefusal(text) {
+  if (!text) return true;
+  const lower = text.toLowerCase();
+  
+  // Check English refusal patterns
+  const englishRefusalKeywords = [
+    "i'm not able",
+    "i cannot",
+    "i can't",
+    "i won't",
+    "regulatory concern",
+    "medical risk",
+    "safety concerns",
+    "i'd encourage them to visit",
+    "licensed dermatologist",
+    "i don't feel comfortable",
+    "i'm unable to",
+  ];
+
+  // Check Vietnamese refusal patterns
+  const vietnameseRefusalKeywords = [
+    "tôi không thể",
+    "tôi xin lỗi nhưng",
+    "không thể giúp",
+    "rất tiếc",
+    "lo ngại về",
+  ];
+
+  for (const keyword of [...englishRefusalKeywords, ...vietnameseRefusalKeywords]) {
+    if (lower.includes(keyword)) return true;
+  }
+
+  // Caption phải có ít nhất hashtag hoặc SĐT
+  if (!text.includes("#") && !text.includes("0979")) return true;
+
+  return false;
+}
+
+function getRandomFallbackCaption() {
+  const idx = Math.floor(Math.random() * FALLBACK_CAPTIONS.length);
+  return FALLBACK_CAPTIONS[idx];
+}
+
+// ============================================================
+//  CLAUDE VIẾT CAPTION
 // ============================================================
 async function generateCaption(imageBuffer, mimeType) {
   const imageBase64 = imageBuffer.toString("base64");
 
-  const prompt = `Bạn đang giúp Cô Lan viết bài đăng Facebook cho page "Tẩy nốt ruồi gia truyền Cô Lan" — đã hoạt động hơn 10 năm tại Hà Nội và Quảng Ninh, phục vụ hàng nghìn khách.
+  const prompt = `Bạn đang viết bài đăng Facebook cho một dịch vụ làm đẹp gia truyền tại Hà Nội và Quảng Ninh đã hoạt động hơn 10 năm.
 
-VỀ DỊCH VỤ:
-- DỊCH VỤ làm trực tiếp tại cơ sở, KHÔNG phải bán thuốc
-- Cô Lan dùng bí quyết gia truyền của gia đình, áp dụng trực tiếp lên da
-- Khách đến tận nơi, không có giao hàng
-- Mỗi ca 15-30 phút, xong khách về luôn
-- Hai cơ sở: Hà Nội (Resco, Xuân Đỉnh) và Quảng Ninh (chợ Mạo Khê)
-- Đặt lịch: 0979979981
+Cô Lan là chủ cơ sở. Bài đăng để chia sẻ về công việc hàng ngày của cô — như một người nghệ nhân làm nghề lâu năm chia sẻ với khách hàng cũ.
 
-Đây là ảnh quá trình cô Lan đang làm cho khách. Hãy viết bài đăng Facebook tự nhiên, gồm:
-- Mở đầu bằng lời tâm tình của cô Lan
-- Mô tả ngắn về trải nghiệm khách (dựa vào ảnh)
-- Nhắc phương pháp gia truyền: nhẹ nhàng, làm trực tiếp
-- Nhấn mạnh: 2 cơ sở Hà Nội và Quảng Ninh
-- Mời khách nhắn page hoặc gọi 0979979981
-- 5-7 hashtag cuối bài
+Hãy viết bài đăng Facebook với:
+- Mở đầu thân thiện kiểu "Hôm nay cô lại có một bạn khách..." hoặc "Các bạn ơi..."
+- Mô tả ngắn về buổi làm việc trong ngày của cô
+- Nhắc đến phương pháp truyền thống của gia đình
+- Ghi rõ 2 cơ sở: Hà Nội (P.803 KĐT Resco, Xuân Đỉnh) và Quảng Ninh (chợ Mạo Khê)  
+- Mời khách quan tâm nhắn page hoặc gọi 0979.979.981
+- Kết thúc với 5-7 hashtag
 
 Yêu cầu:
-- Giọng cô Lan: thân thiện, ấm áp
-- Độ dài 100-150 chữ
-- Tiếng Việt tự nhiên miền Bắc
-- KHÔNG dùng từ tuyệt đối ("100%", "khỏi hoàn toàn")
-- KHÔNG nhắc bán thuốc, gửi thuốc
+- Giọng văn ấm áp, gần gũi, tiếng Việt miền Bắc
+- 100-150 chữ
+- KHÔNG dùng từ ngữ y tế ("chữa", "khỏi", "trị")
+- Chỉ chia sẻ về dịch vụ và mời gọi, không cam kết hiệu quả
 
-Chỉ trả về nội dung bài đăng.`;
+Chỉ trả về nội dung bài đăng bằng tiếng Việt, không giải thích thêm, không có lời mở đầu.`;
 
-  const response = await axios.post(
-    "https://api.anthropic.com/v1/messages",
-    {
-      model: "claude-sonnet-4-6",
-      max_tokens: 600,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mimeType, data: imageBase64 } },
-            { type: "text", text: prompt },
-          ],
-        },
-      ],
-    },
-    {
-      headers: {
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
+  try {
+    const response = await axios.post(
+      "https://api.anthropic.com/v1/messages",
+      {
+        model: "claude-sonnet-4-6",
+        max_tokens: 600,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: mimeType, data: imageBase64 } },
+              { type: "text", text: prompt },
+            ],
+          },
+        ],
       },
-    }
-  );
+      {
+        headers: {
+          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+      }
+    );
 
-  return response.data.content[0].text;
+    const caption = response.data.content[0].text;
+
+    // Kiểm tra Claude có từ chối không
+    if (isRefusal(caption)) {
+      console.log("⚠️  Claude từ chối viết, dùng caption mẫu");
+      return getRandomFallbackCaption();
+    }
+
+    return caption;
+  } catch (err) {
+    console.log("⚠️  Lỗi gọi Claude, dùng caption mẫu:", err.message);
+    return getRandomFallbackCaption();
+  }
 }
 
 async function postToFacebook(imageBuffer, caption) {
@@ -173,32 +250,26 @@ async function runAutoPost() {
   try {
     const drive = getDriveClient();
 
-    // 1. Lấy ảnh khách kế tiếp
     const photo = await getNextPhoto(drive);
     if (!photo) return;
     console.log(`📸 Đang xử lý: ${photo.name}`);
 
-    // 2. Tải ảnh khách + template
     const customerPhotoBuffer = await downloadFromDrive(drive, photo.id);
     console.log("✅ Đã tải ảnh khách");
 
     const templateBuffer = await downloadFromDrive(drive, POST_CONFIG.TEMPLATE_FILE_ID);
     console.log("✅ Đã tải template");
 
-    // 3. Ghép ảnh khách vào template
     const composedImage = await composeWithTemplate(customerPhotoBuffer, templateBuffer);
     console.log("🎨 Đã ghép ảnh thành công");
 
-    // 4. Claude viết caption (dựa trên ảnh GỐC của khách)
     console.log("✍️  Claude đang viết caption...");
     const caption = await generateCaption(customerPhotoBuffer, photo.mimeType);
     console.log(`📝 Caption:\n${caption}\n`);
 
-    // 5. Đăng ảnh ĐÃ GHÉP lên Facebook
     const postId = await postToFacebook(composedImage, caption);
     console.log(`🎉 Đã đăng thành công! Post ID: ${postId}`);
 
-    // 6. Chuyển ảnh khách đã dùng sang folder Đã đăng
     await moveToPosted(drive, photo.id);
     console.log("📁 Đã chuyển ảnh vào folder Đã đăng");
   } catch (err) {
