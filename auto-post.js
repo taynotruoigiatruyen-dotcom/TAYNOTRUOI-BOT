@@ -1,41 +1,23 @@
 const { google } = require("googleapis");
 const axios = require("axios");
 const cron = require("node-cron");
+const FormData = require("form-data");
 
-// ============================================================
-//  CẤU HÌNH AUTO-POST
-// ============================================================
 const POST_CONFIG = {
-  // Đăng lúc 20:00 mỗi ngày (múi giờ UTC+7 = 13:00 UTC)
   CRON_SCHEDULE: "0 13 * * *",
-
-  // ID folder Google Drive chứa ảnh chưa đăng
-  // Lấy từ URL: drive.google.com/drive/folders/[FOLDER_ID]
   SOURCE_FOLDER_ID: process.env.DRIVE_FOLDER_ID,
-
-  // ID folder "Đã đăng" — ảnh sau khi đăng sẽ chuyển vào đây
-  // Tạo 1 folder tên "Đã đăng" trong Drive rồi copy ID vào
   POSTED_FOLDER_ID: process.env.DRIVE_POSTED_FOLDER_ID,
 };
 
-// ============================================================
-//  KẾT NỐI GOOGLE DRIVE
-// ============================================================
 function getDriveClient() {
-  // Đọc thông tin Service Account từ environment variable
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-
   const auth = new google.auth.GoogleAuth({
     credentials,
     scopes: ["https://www.googleapis.com/auth/drive"],
   });
-
   return google.drive({ version: "v3", auth });
 }
 
-// ============================================================
-//  LẤY 1 ẢNH CHƯA ĐĂNG TỪ DRIVE
-// ============================================================
 async function getNextPhoto(drive) {
   const response = await drive.files.list({
     q: `'${POST_CONFIG.SOURCE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`,
@@ -43,44 +25,54 @@ async function getNextPhoto(drive) {
     pageSize: 50,
     orderBy: "createdTime",
   });
-
   const files = response.data.files;
   if (!files || files.length === 0) {
-    console.log("⚠️  Không còn ảnh nào để đăng trong folder!");
+    console.log("⚠️  Không còn ảnh nào để đăng!");
     return null;
   }
-
-  // Lấy ảnh đầu tiên (cũ nhất)
   return files[0];
 }
 
-// ============================================================
-//  TẢI ẢNH VỀ DẠNG BASE64
-// ============================================================
-async function downloadPhotoAsBase64(drive, fileId, mimeType) {
+async function downloadPhotoAsBuffer(drive, fileId) {
   const response = await drive.files.get(
     { fileId, alt: "media" },
     { responseType: "arraybuffer" }
   );
-
-  const buffer = Buffer.from(response.data);
-  return buffer.toString("base64");
+  return Buffer.from(response.data);
 }
 
 // ============================================================
-//  CLAUDE XEM ẢNH VÀ VIẾT CAPTION
+//  CLAUDE VIẾT CAPTION
 // ============================================================
-async function generateCaption(imageBase64, mimeType) {
-  const prompt = `Đây là ảnh quá trình tẩy nốt ruồi/đồi mồi/tàn nhang bằng thuốc thảo dược gia truyền của cô Lan (SĐT: 0979979981).
+async function generateCaption(imageBuffer, mimeType) {
+  const imageBase64 = imageBuffer.toString("base64");
 
-Hãy viết 1 bài đăng Facebook cho ảnh này với yêu cầu:
-- Mở đầu thu hút, tạo tò mò hoặc đồng cảm với khách hàng
-- Nhắc đến ưu điểm: không đau, không sẹo, thuốc thảo dược an toàn, hiệu quả ngay
-- Kêu gọi hành động nhẹ nhàng: nhắn tin hoặc gọi 0979979981
-- Thêm 5-7 hashtag phù hợp cuối bài
-- Giọng văn thân thiện, chân thực, không quá quảng cáo
-- Độ dài: 100-150 chữ
-- Viết bằng tiếng Việt tự nhiên
+  const prompt = `Bạn đang giúp Cô Lan viết bài đăng Facebook cho page "Tẩy nốt ruồi gia truyền Cô Lan" — đã hoạt động hơn 10 năm tại Hà Nội và Quảng Ninh, phục vụ hàng nghìn khách.
+
+VỀ DỊCH VỤ (rất quan trọng để hiểu đúng):
+- Đây là DỊCH VỤ làm trực tiếp tại cơ sở của cô Lan, KHÔNG phải bán thuốc
+- Cô Lan dùng bí quyết gia truyền của gia đình, áp dụng trực tiếp lên da khách
+- Khách đến tận nơi gặp cô Lan, không có giao hàng, không gửi qua bưu điện
+- Mỗi ca làm khoảng 15-30 phút, xong khách về luôn
+- Hai cơ sở: Hà Nội (Resco, Xuân Đỉnh) và Quảng Ninh (chợ Mạo Khê)
+- Đặt lịch qua SĐT 0979979981
+
+Đây là ảnh quá trình cô Lan đang làm cho khách hàng thực tế. Hãy viết một bài đăng Facebook tự nhiên, gồm:
+
+- Mở đầu bằng lời tâm tình của cô Lan (vd: "Hôm nay cô vừa làm xong cho một bạn...", "Có nhiều bạn nhắn hỏi cô...", "Lại thêm một khách hàng tin tưởng cô...")
+- Mô tả ngắn về tình huống/trải nghiệm của khách (dựa vào ảnh)
+- Nhắc đến phương pháp gia truyền: nhẹ nhàng, làm trực tiếp, không xâm lấn
+- Nhấn mạnh: cô làm tại Hà Nội và Quảng Ninh, khách có thể đặt lịch đến trực tiếp
+- Mời khách quan tâm nhắn page hoặc gọi 0979979981 để được tư vấn miễn phí
+- Thêm 5-7 hashtag cuối bài (vd: #taynottruoi #giatruyen #colandepot #notentamruoi #taynottruoihanoi #taynottruoiquangninh)
+
+Yêu cầu:
+- Giọng cô Lan: thân thiện, gần gũi, ấm áp, như người làm nghề lâu năm
+- Độ dài 100-150 chữ
+- Tiếng Việt tự nhiên miền Bắc
+- KHÔNG dùng từ ngữ tuyệt đối ("100%", "khỏi hoàn toàn")
+- KHÔNG nhắc đến bán thuốc, gửi thuốc, ship hàng
+- KHÔNG đưa ra cam kết y tế, chỉ chia sẻ kinh nghiệm và dịch vụ
 
 Chỉ trả về nội dung bài đăng, không giải thích thêm.`;
 
@@ -88,23 +80,16 @@ Chỉ trả về nội dung bài đăng, không giải thích thêm.`;
     "https://api.anthropic.com/v1/messages",
     {
       model: "claude-sonnet-4-6",
-      max_tokens: 500,
+      max_tokens: 600,
       messages: [
         {
           role: "user",
           content: [
             {
               type: "image",
-              source: {
-                type: "base64",
-                media_type: mimeType,
-                data: imageBase64,
-              },
+              source: { type: "base64", media_type: mimeType, data: imageBase64 },
             },
-            {
-              type: "text",
-              text: prompt,
-            },
+            { type: "text", text: prompt },
           ],
         },
       ],
@@ -121,41 +106,25 @@ Chỉ trả về nội dung bài đăng, không giải thích thêm.`;
   return response.data.content[0].text;
 }
 
-// ============================================================
-//  ĐĂNG ẢNH + CAPTION LÊN FACEBOOK PAGE
-// ============================================================
-async function postToFacebook(imageBase64, mimeType, caption) {
-  // Bước 1: Upload ảnh lên Facebook (chưa publish)
-  const imageBuffer = Buffer.from(imageBase64, "base64");
-
+async function postToFacebook(imageBuffer, caption) {
   const formData = new FormData();
-  const blob = new Blob([imageBuffer], { type: mimeType });
-  formData.append("source", blob, "photo.jpg");
+  formData.append("source", imageBuffer, {
+    filename: "photo.jpg",
+    contentType: "image/jpeg",
+  });
   formData.append("caption", caption);
   formData.append("access_token", process.env.PAGE_ACCESS_TOKEN);
 
   const response = await axios.post(
     `https://graph.facebook.com/v19.0/me/photos`,
     formData,
-    {
-      headers: { "Content-Type": "multipart/form-data" },
-    }
+    { headers: formData.getHeaders() }
   );
-
   return response.data.id;
 }
 
-// ============================================================
-//  CHUYỂN ẢNH ĐÃ ĐĂNG VÀO FOLDER "ĐÃ ĐĂNG"
-// ============================================================
 async function moveToPosted(drive, fileId) {
-  // Lấy parent hiện tại
-  const file = await drive.files.get({
-    fileId,
-    fields: "parents",
-  });
-
-  // Chuyển folder
+  const file = await drive.files.get({ fileId, fields: "parents" });
   await drive.files.update({
     fileId,
     addParents: POST_CONFIG.POSTED_FOLDER_ID,
@@ -164,52 +133,38 @@ async function moveToPosted(drive, fileId) {
   });
 }
 
-// ============================================================
-//  HÀM CHÍNH: CHẠY TOÀN BỘ QUY TRÌNH
-// ============================================================
 async function runAutoPost() {
   console.log("🕐 Bắt đầu auto-post...");
-
   try {
     const drive = getDriveClient();
-
-    // 1. Lấy ảnh tiếp theo
     const photo = await getNextPhoto(drive);
     if (!photo) return;
     console.log(`📸 Đang xử lý ảnh: ${photo.name}`);
 
-    // 2. Tải ảnh về
-    const imageBase64 = await downloadPhotoAsBase64(drive, photo.id, photo.mimeType);
+    const imageBuffer = await downloadPhotoAsBuffer(drive, photo.id);
     console.log("✅ Đã tải ảnh về");
 
-    // 3. Claude viết caption
     console.log("✍️  Claude đang viết caption...");
-    const caption = await generateCaption(imageBase64, photo.mimeType);
+    const caption = await generateCaption(imageBuffer, photo.mimeType);
     console.log(`📝 Caption:\n${caption}\n`);
 
-    // 4. Đăng lên Facebook
-    const postId = await postToFacebook(imageBase64, photo.mimeType, caption);
+    const postId = await postToFacebook(imageBuffer, caption);
     console.log(`🎉 Đã đăng thành công! Post ID: ${postId}`);
 
-    // 5. Chuyển ảnh vào folder "Đã đăng"
     await moveToPosted(drive, photo.id);
     console.log("📁 Đã chuyển ảnh vào folder Đã đăng");
-
   } catch (err) {
     console.error("❌ Lỗi auto-post:", err.message);
+    if (err.response?.data) {
+      console.error("Chi tiết:", JSON.stringify(err.response.data));
+    }
   }
 }
 
-// ============================================================
-//  KHỞI ĐỘNG SCHEDULER
-// ============================================================
 function startAutoPost() {
   console.log(`📅 Auto-post đã bật — đăng lúc 20:00 mỗi ngày`);
-
-  cron.schedule(POST_CONFIG.CRON_SCHEDULE, () => {
-    runAutoPost();
-  }, {
-    timezone: "Asia/Ho_Chi_Minh"
+  cron.schedule(POST_CONFIG.CRON_SCHEDULE, runAutoPost, {
+    timezone: "Asia/Ho_Chi_Minh",
   });
 }
 
