@@ -5,8 +5,9 @@ const FormData = require("form-data");
 const sharp = require("sharp");
 
 const POST_CONFIG = {
-  CRON_SCHEDULE: "0 13 * * *",
-  SOURCE_FOLDER_ID: process.env.DRIVE_FOLDER_ID,
+  CRON_SCHEDULE: "0 13 * * *", // 20:00 GMT+7
+  PHOTO_FOLDER_ID: process.env.DRIVE_FOLDER_ID, // folder ảnh chưa đăng
+  VIDEO_FOLDER_ID: process.env.DRIVE_VIDEO_FOLDER_ID, // folder video chưa đăng (NEW)
   POSTED_FOLDER_ID: process.env.DRIVE_POSTED_FOLDER_ID,
   TEMPLATE_FILE_ID: process.env.DRIVE_TEMPLATE_FILE_ID,
 };
@@ -19,11 +20,9 @@ const PHOTO_AREA = {
 };
 
 // ============================================================
-//  CAPTION MẪU - dùng khi AI từ chối hoặc lỗi
-//  (Đa dạng theo các chủ đề khác nhau để page không bị nhàm)
+//  CAPTION MẪU CHO ẢNH
 // ============================================================
-const FALLBACK_CAPTIONS = [
-  // Chủ đề 1: Câu chuyện gia truyền
+const PHOTO_CAPTIONS = [
   `Các bạn ơi, hôm nay cô lại có một bạn khách ghé qua cơ sở. Nghề này cô theo từ hồi còn trẻ, học từ bà nội — bà ngày xưa lại được học từ một thầy đông y người Trung Quốc truyền cho ông cô. Đến giờ đã hơn 40 năm rồi, cứ thế mà gắn bó.
 
 Bí quyết bào chế thuốc trong nhà cô chỉ một mình cô nắm được, chấm thuốc cũng có liều lượng riêng — đó là lý do cô không bán thuốc ra ngoài. Khách muốn làm thì đến cơ sở, cô làm trực tiếp.
@@ -34,7 +33,6 @@ Bí quyết bào chế thuốc trong nhà cô chỉ một mình cô nắm đư�
 
 #TayNotRuoi #GiaTruyen3Doi #CoLanMaoKhe #DongYGiaTruyen #HaNoi #QuangNinh`,
 
-  // Chủ đề 2: Khách quen, được giới thiệu
   `Hôm nay cô đón thêm một bạn khách mới - bạn ấy được người quen giới thiệu đến cô. Bao năm làm nghề, niềm vui lớn nhất của cô là khách cũ tin tưởng giới thiệu cho người thân, bạn bè 😊
 
 Nhiều bạn ở xa cũng nhắn cô xin mua thuốc về tự chấm, nhưng cô không bán đâu nha. Vì liều lượng và cách chấm là bí quyết riêng, không đúng thì không có tác dụng. Cô làm trực tiếp để đảm bảo cho các bạn.
@@ -43,7 +41,6 @@ Bạn nào có nhu cầu cứ ghé cô tại Hà Nội (P.803 KĐT Resco, Xuân 
 
 #TayNotRuoi #GiaTruyenCoLan #UyTinTanTam #LamDepGiaTruyen`,
 
-  // Chủ đề 3: Cô đi xa làm cho khách
   `Các bạn ở xa hỏi cô có đi vào trong Nam làm được không - cô đã có nhiều chuyến đi vào tận TP. Hồ Chí Minh và nhiều tỉnh thành khác để làm cho khách rồi. Bạn nào ở xa có nhu cầu cứ liên hệ trước, cô sẽ sắp xếp lịch.
 
 Còn ở Hà Nội và Quảng Ninh thì cô có cơ sở cố định, các bạn cứ đến trực tiếp:
@@ -54,7 +51,6 @@ Còn ở Hà Nội và Quảng Ninh thì cô có cơ sở cố định, các b�
 
 #TayNotRuoi #CoLanMaoKhe #GiaTruyen #HoChiMinh #HaNoi #QuangNinh`,
 
-  // Chủ đề 4: Tâm sự nghề nghiệp
   `Một ngày làm việc nữa của cô tại cơ sở. Bao nhiêu năm gắn bó với nghề, mỗi khách đến với cô đều là một câu chuyện riêng. Có bạn ngần ngại nốt ruồi trên mặt mãi mới dám đi tẩy, có bạn quan tâm đến sức khỏe muốn xử lý sớm.
 
 Phương pháp gia truyền của nhà cô đã 3 đời, ông cô được học từ thầy đông y Trung Quốc, sau truyền lại trong gia đình. Đến cô là đời thứ ba duy nhất nắm được bí quyết bào chế thuốc.
@@ -63,7 +59,6 @@ Bạn nào quan tâm cứ nhắn page hoặc gọi cô qua số 0979.979.981. C�
 
 #TayNotRuoi #GiaTruyen #CoLan #DongYTruyenThong`,
 
-  // Chủ đề 5: Cô ở chợ Mạo Khê
   `Tại chợ Mạo Khê (Quảng Ninh), nhiều bạn hỏi "tẩy nốt ruồi gia truyền cô Lan" thì hầu như ai cũng biết - bao nhiêu năm cô ở đây làm nghề rồi 😊
 
 Ngoài cơ sở Quảng Ninh, cô còn có cơ sở tại Hà Nội (P.803 KĐT Resco, Xuân Đỉnh) cho các bạn ở khu vực phía Bắc tiện ghé.
@@ -75,6 +70,72 @@ Bí quyết gia truyền của gia đình cô là phương pháp đông y, làm 
 #TayNotRuoi #CoLanMaoKhe #ChoMaoKhe #QuangNinh #HaNoi #GiaTruyen`,
 ];
 
+// ============================================================
+//  CAPTION MẪU CHO VIDEO (riêng để phù hợp format video)
+// ============================================================
+const VIDEO_CAPTIONS = [
+  `Cùng xem cô Lan làm việc nhé các bạn 🎬
+
+Phương pháp gia truyền 3 đời của nhà cô — nhẹ nhàng, làm trực tiếp lên da, không xâm lấn, không cần dao kéo. Mỗi ca chỉ 15-30 phút là xong.
+
+Cô có 2 cơ sở:
+📍 Hà Nội: P.803 KĐT Resco, Xuân Đỉnh
+📍 Quảng Ninh: Chợ Trung tâm Mạo Khê
+
+Bạn nào quan tâm cứ nhắn page hoặc gọi cô:
+☎ 0979.979.981
+
+#TayNotRuoi #GiaTruyen #CoLan #DongY #HaNoi #QuangNinh`,
+
+  `Một ngày làm việc của cô Lan 🌿
+
+Bao năm gắn bó với nghề, cô vẫn luôn tận tâm với từng khách hàng. Bí quyết gia truyền của nhà cô được truyền lại 3 đời - từ ông cô (học từ thầy đông y Trung Quốc), đến mẹ cô, rồi đến cô.
+
+Khách muốn làm thì đến trực tiếp 1 trong 2 cơ sở:
+📍 Hà Nội: P.803 KĐT Resco, Xuân Đỉnh
+📍 Quảng Ninh: Chợ Trung tâm Mạo Khê
+
+☎ Đặt lịch: 0979.979.981
+
+#TayNotRuoi #GiaTruyenCoLan #LamDepTuNhien #UyTinTanTam`,
+
+  `Các bạn xem cô làm cho khách nhé 😊
+
+Nhiều bạn nhắn xin mua thuốc về tự chấm nhưng cô không bán đâu - vì liều lượng và cách chấm là bí quyết riêng, không đúng thì không có tác dụng. Cô chỉ làm trực tiếp để đảm bảo cho các bạn.
+
+Khách ở xa có thể liên hệ để cô sắp xếp lịch đi vào - cô đã từng đi tận TP.HCM và nhiều tỉnh thành khác rồi.
+
+📍 2 cơ sở: Hà Nội + Quảng Ninh
+☎ Cô Lan: 0979.979.981
+
+#TayNotRuoi #GiaTruyen #CoLan #HoChiMinh #DiTinh`,
+
+  `Cô Lan đang làm cho một bạn khách 🎥
+
+Tại chợ Mạo Khê (Quảng Ninh) - nơi cô đã làm nghề hơn 40 năm, hỏi "cô Lan tẩy nốt ruồi" ai cũng biết. Cô cũng có cơ sở tại Hà Nội (P.803 KĐT Resco, Xuân Đỉnh) cho các bạn ở phía Bắc.
+
+Phương pháp gia truyền - nhẹ nhàng, làm trực tiếp, an toàn cho da.
+
+☎ Đặt lịch: 0979.979.981
+
+#TayNotRuoi #CoLanMaoKhe #ChoMaoKhe #QuangNinh #HaNoi`,
+
+  `Một ca làm việc của cô Lan ✨
+
+Mỗi ngày cô đón nhiều khách, có bạn ở Hà Nội, có bạn ở Quảng Ninh, có cả bạn từ xa đến. Cô vui nhất là khi khách cũ tin tưởng giới thiệu cho người thân, bạn bè.
+
+Hai cơ sở của cô:
+📍 Hà Nội: P.803 KĐT Resco, Xuân Đỉnh
+📍 Quảng Ninh: Chợ Trung tâm Mạo Khê
+
+Bạn nào quan tâm cứ nhắn page hoặc gọi 0979.979.981 nhé!
+
+#TayNotRuoi #GiaTruyen #CoLan #LamDepGiaTruyen #UyTin`,
+];
+
+// ============================================================
+//  HELPERS
+// ============================================================
 function getDriveClient() {
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
   const auth = new google.auth.GoogleAuth({
@@ -84,19 +145,14 @@ function getDriveClient() {
   return google.drive({ version: "v3", auth });
 }
 
-async function getNextPhoto(drive) {
+async function listFiles(drive, folderId, mimeFilter) {
   const response = await drive.files.list({
-    q: `'${POST_CONFIG.SOURCE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`,
-    fields: "files(id, name, mimeType)",
+    q: `'${folderId}' in parents and mimeType contains '${mimeFilter}' and trashed = false`,
+    fields: "files(id, name, mimeType, size)",
     pageSize: 50,
     orderBy: "createdTime",
   });
-  const files = response.data.files;
-  if (!files || files.length === 0) {
-    console.log("⚠️  Hết ảnh trong folder rồi!");
-    return null;
-  }
-  return files[0];
+  return response.data.files || [];
 }
 
 async function downloadFromDrive(drive, fileId) {
@@ -105,152 +161,6 @@ async function downloadFromDrive(drive, fileId) {
     { responseType: "arraybuffer" }
   );
   return Buffer.from(response.data);
-}
-
-async function composeWithTemplate(customerPhotoBuffer, templateBuffer) {
-  console.log("🎨 Đang ghép ảnh vào template...");
-  const resizedPhoto = await sharp(customerPhotoBuffer)
-    .resize(PHOTO_AREA.width, PHOTO_AREA.height, {
-      fit: "cover",
-      position: "center",
-    })
-    .toBuffer();
-
-  const composedImage = await sharp(templateBuffer)
-    .composite([
-      {
-        input: resizedPhoto,
-        top: PHOTO_AREA.y,
-        left: PHOTO_AREA.x,
-      },
-    ])
-    .jpeg({ quality: 92 })
-    .toBuffer();
-
-  return composedImage;
-}
-
-function isRefusal(text) {
-  if (!text) return true;
-  const lower = text.toLowerCase();
-  
-  const refusalKeywords = [
-    "i'm not able", "i cannot", "i can't", "i won't",
-    "regulatory concern", "medical risk", "safety concerns",
-    "i'd encourage them to visit", "licensed dermatologist",
-    "i don't feel comfortable", "i'm unable to",
-    "tôi không thể", "tôi xin lỗi nhưng", "không thể giúp",
-    "rất tiếc", "lo ngại về",
-  ];
-
-  for (const keyword of refusalKeywords) {
-    if (lower.includes(keyword)) return true;
-  }
-
-  if (!text.includes("#") && !text.includes("0979")) return true;
-  return false;
-}
-
-function getRandomFallbackCaption() {
-  const idx = Math.floor(Math.random() * FALLBACK_CAPTIONS.length);
-  return FALLBACK_CAPTIONS[idx];
-}
-
-// ============================================================
-//  CLAUDE VIẾT CAPTION (với câu chuyện gia truyền 3 đời)
-// ============================================================
-async function generateCaption(imageBuffer, mimeType) {
-  const imageBase64 = imageBuffer.toString("base64");
-
-  const prompt = `Bạn đang viết bài đăng Facebook cho cơ sở "Tẩy nốt ruồi gia truyền Cô Lan" — đã hoạt động hơn 40 năm tại Hà Nội và Quảng Ninh.
-
-CÂU CHUYỆN GIA TRUYỀN (có thể dùng để làm phong phú bài viết):
-- Nghề này được truyền 3 đời trong gia đình cô Lan
-- Ngày xưa, ông cô Lan học bí quyết từ một thầy đông y người Trung Quốc
-- Ông truyền nghề cho nhiều người con, nhưng chỉ một mình cô Lan học được
-- Cô Lan là người duy nhất nắm bí quyết bào chế thuốc
-- Bí quyết chấm thuốc, liều lượng đều là bí truyền - cô không bán thuốc ra ngoài
-- Cô Lan đã có nhiều chuyến đi vào TP.HCM và các tỉnh khác để làm cho khách
-- Tại chợ Mạo Khê, hỏi "cô Lan tẩy nốt ruồi" ai cũng biết
-
-THÔNG TIN CƠ SỞ:
-- Hà Nội: P.803 KĐT Resco, Xuân Đỉnh
-- Quảng Ninh: Chợ Trung tâm Mạo Khê
-- Đặt lịch: 0979.979.981
-- Khách ở xa có thể liên hệ để cô sắp xếp lịch đi vào
-
-Hãy viết một bài đăng Facebook tự nhiên, kiểu cô Lan chia sẻ với khách hàng. Có thể chọn 1 trong các góc độ sau:
-- Tâm sự về 1 ca làm hôm nay
-- Kể câu chuyện gia truyền của gia đình
-- Chia sẻ về việc khách cũ giới thiệu khách mới
-- Nhắc đến chuyến đi xa làm cho khách
-- Lý do không bán thuốc
-
-Yêu cầu:
-- Giọng cô Lan: ấm áp, gần gũi, tiếng Việt miền Bắc tự nhiên
-- 100-180 chữ
-- Nhắc 2 cơ sở Hà Nội + Quảng Ninh
-- Mời nhắn page hoặc gọi 0979.979.981
-- Kết thúc với 5-7 hashtag
-- KHÔNG dùng từ y tế ("chữa", "khỏi", "trị", "điều trị")
-- Chỉ chia sẻ về dịch vụ và mời gọi
-
-Chỉ trả về nội dung bài đăng bằng tiếng Việt, không lời mở đầu, không giải thích.`;
-
-  try {
-    const response = await axios.post(
-      "https://api.anthropic.com/v1/messages",
-      {
-        model: "claude-sonnet-4-6",
-        max_tokens: 700,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "image", source: { type: "base64", media_type: mimeType, data: imageBase64 } },
-              { type: "text", text: prompt },
-            ],
-          },
-        ],
-      },
-      {
-        headers: {
-          "x-api-key": process.env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-      }
-    );
-
-    const caption = response.data.content[0].text;
-
-    if (isRefusal(caption)) {
-      console.log("⚠️  Claude từ chối viết, dùng caption mẫu");
-      return getRandomFallbackCaption();
-    }
-
-    return caption;
-  } catch (err) {
-    console.log("⚠️  Lỗi gọi Claude, dùng caption mẫu:", err.message);
-    return getRandomFallbackCaption();
-  }
-}
-
-async function postToFacebook(imageBuffer, caption) {
-  const formData = new FormData();
-  formData.append("source", imageBuffer, {
-    filename: "post.jpg",
-    contentType: "image/jpeg",
-  });
-  formData.append("caption", caption);
-  formData.append("access_token", process.env.PAGE_ACCESS_TOKEN);
-
-  const response = await axios.post(
-    `https://graph.facebook.com/v19.0/me/photos`,
-    formData,
-    { headers: formData.getHeaders() }
-  );
-  return response.data.id;
 }
 
 async function moveToPosted(drive, fileId) {
@@ -263,33 +173,158 @@ async function moveToPosted(drive, fileId) {
   });
 }
 
+function getRandomCaption(captions) {
+  return captions[Math.floor(Math.random() * captions.length)];
+}
+
+// ============================================================
+//  XỬ LÝ ẢNH
+// ============================================================
+async function composeWithTemplate(customerPhotoBuffer, templateBuffer) {
+  const resizedPhoto = await sharp(customerPhotoBuffer)
+    .resize(PHOTO_AREA.width, PHOTO_AREA.height, {
+      fit: "cover",
+      position: "center",
+    })
+    .toBuffer();
+
+  return await sharp(templateBuffer)
+    .composite([
+      { input: resizedPhoto, top: PHOTO_AREA.y, left: PHOTO_AREA.x },
+    ])
+    .jpeg({ quality: 92 })
+    .toBuffer();
+}
+
+async function postPhoto(drive) {
+  console.log("📸 Bắt đầu đăng ảnh...");
+
+  const photos = await listFiles(drive, POST_CONFIG.PHOTO_FOLDER_ID, "image/");
+  if (photos.length === 0) {
+    console.log("⚠️  Không có ảnh trong folder!");
+    return false;
+  }
+
+  const photo = photos[0];
+  console.log(`📸 Đang xử lý: ${photo.name}`);
+
+  const customerPhotoBuffer = await downloadFromDrive(drive, photo.id);
+  const templateBuffer = await downloadFromDrive(drive, POST_CONFIG.TEMPLATE_FILE_ID);
+  const composedImage = await composeWithTemplate(customerPhotoBuffer, templateBuffer);
+  console.log("🎨 Đã ghép ảnh vào template");
+
+  const caption = getRandomCaption(PHOTO_CAPTIONS);
+  console.log(`📝 Caption: ${caption.substring(0, 80)}...`);
+
+  const formData = new FormData();
+  formData.append("source", composedImage, {
+    filename: "post.jpg",
+    contentType: "image/jpeg",
+  });
+  formData.append("caption", caption);
+  formData.append("access_token", process.env.PAGE_ACCESS_TOKEN);
+
+  const response = await axios.post(
+    `https://graph.facebook.com/v19.0/me/photos`,
+    formData,
+    { headers: formData.getHeaders() }
+  );
+  console.log(`🎉 Đã đăng ảnh! Post ID: ${response.data.id}`);
+
+  await moveToPosted(drive, photo.id);
+  console.log("📁 Đã chuyển ảnh vào folder Đã đăng");
+  return true;
+}
+
+// ============================================================
+//  XỬ LÝ VIDEO
+// ============================================================
+async function postVideo(drive) {
+  console.log("🎬 Bắt đầu đăng video...");
+
+  const videos = await listFiles(drive, POST_CONFIG.VIDEO_FOLDER_ID, "video/");
+  if (videos.length === 0) {
+    console.log("⚠️  Không có video trong folder!");
+    return false;
+  }
+
+  const video = videos[0];
+  const sizeMB = (video.size / 1024 / 1024).toFixed(2);
+  console.log(`🎬 Đang xử lý: ${video.name} (${sizeMB} MB)`);
+
+  // Tải video về
+  const videoBuffer = await downloadFromDrive(drive, video.id);
+  console.log("✅ Đã tải video về");
+
+  const caption = getRandomCaption(VIDEO_CAPTIONS);
+  console.log(`📝 Caption: ${caption.substring(0, 80)}...`);
+
+  // Upload video lên Facebook
+  const formData = new FormData();
+  formData.append("source", videoBuffer, {
+    filename: video.name,
+    contentType: video.mimeType || "video/mp4",
+  });
+  formData.append("description", caption);
+  formData.append("access_token", process.env.PAGE_ACCESS_TOKEN);
+
+  const response = await axios.post(
+    `https://graph.facebook.com/v19.0/me/videos`,
+    formData,
+    {
+      headers: formData.getHeaders(),
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    }
+  );
+  console.log(`🎉 Đã đăng video! Video ID: ${response.data.id}`);
+
+  await moveToPosted(drive, video.id);
+  console.log("📁 Đã chuyển video vào folder Đã đăng");
+  return true;
+}
+
+// ============================================================
+//  HÀM CHÍNH - QUYẾT ĐỊNH ĐĂNG ẢNH HAY VIDEO
+// ============================================================
 async function runAutoPost() {
   console.log("🕐 Bắt đầu auto-post...");
+
   try {
     const drive = getDriveClient();
 
-    const photo = await getNextPhoto(drive);
-    if (!photo) return;
-    console.log(`📸 Đang xử lý: ${photo.name}`);
+    // Lịch xen kẽ:
+    // Thứ 2 (1), 4 (3), 6 (5) → đăng ảnh
+    // Thứ 3 (2), 5 (4), 7 (6), CN (0) → đăng video
+    const dayOfWeek = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" })
+    ).getDay();
 
-    const customerPhotoBuffer = await downloadFromDrive(drive, photo.id);
-    console.log("✅ Đã tải ảnh khách");
+    const isPhotoDay = [1, 3, 5].includes(dayOfWeek);
+    const dayName = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"][dayOfWeek];
+    console.log(`📅 Hôm nay là ${dayName} → ưu tiên: ${isPhotoDay ? "ẢNH" : "VIDEO"}`);
 
-    const templateBuffer = await downloadFromDrive(drive, POST_CONFIG.TEMPLATE_FILE_ID);
-    console.log("✅ Đã tải template");
+    let success = false;
 
-    const composedImage = await composeWithTemplate(customerPhotoBuffer, templateBuffer);
-    console.log("🎨 Đã ghép ảnh thành công");
+    if (isPhotoDay) {
+      success = await postPhoto(drive);
+      // Nếu hết ảnh, fallback sang video
+      if (!success) {
+        console.log("🔄 Hết ảnh, chuyển sang đăng video");
+        success = await postVideo(drive);
+      }
+    } else {
+      success = await postVideo(drive);
+      // Nếu hết video, fallback sang ảnh
+      if (!success) {
+        console.log("🔄 Hết video, chuyển sang đăng ảnh");
+        success = await postPhoto(drive);
+      }
+    }
 
-    console.log("✍️  Claude đang viết caption...");
-    const caption = await generateCaption(customerPhotoBuffer, photo.mimeType);
-    console.log(`📝 Caption:\n${caption}\n`);
-
-    const postId = await postToFacebook(composedImage, caption);
-    console.log(`🎉 Đã đăng thành công! Post ID: ${postId}`);
-
-    await moveToPosted(drive, photo.id);
-    console.log("📁 Đã chuyển ảnh vào folder Đã đăng");
+    if (!success) {
+      console.log("⚠️  Hết cả ảnh và video! Upload thêm vào Drive nhé.");
+    }
   } catch (err) {
     console.error("❌ Lỗi auto-post:", err.message);
     if (err.response?.data) {
@@ -300,6 +335,7 @@ async function runAutoPost() {
 
 function startAutoPost() {
   console.log(`📅 Auto-post đã bật — đăng lúc 20:00 mỗi ngày`);
+  console.log(`📸 Ảnh: T2, T4, T6  |  🎬 Video: T3, T5, T7, CN`);
   cron.schedule(POST_CONFIG.CRON_SCHEDULE, runAutoPost, {
     timezone: "Asia/Ho_Chi_Minh",
   });
