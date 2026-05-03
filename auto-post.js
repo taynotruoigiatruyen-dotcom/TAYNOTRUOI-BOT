@@ -1,21 +1,23 @@
 const { google } = require("googleapis");
 const axios = require("axios");
 const cron = require("node-cron");
-const FormData = require("form-data");
 
 const POST_CONFIG = {
-  CRON_SCHEDULE: "0 13 * * *",
+  CRON_SCHEDULE: "0 13 * * *", // 20:00 GMT+7
   SOURCE_FOLDER_ID: process.env.DRIVE_FOLDER_ID,
   POSTED_FOLDER_ID: process.env.DRIVE_POSTED_FOLDER_ID,
+  SHEET_ID: process.env.GOOGLE_SHEET_ID,
 };
 
-function getDriveClient() {
+function getAuth() {
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-  const auth = new google.auth.GoogleAuth({
+  return new google.auth.GoogleAuth({
     credentials,
-    scopes: ["https://www.googleapis.com/auth/drive"],
+    scopes: [
+      "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/spreadsheets",
+    ],
   });
-  return google.drive({ version: "v3", auth });
 }
 
 async function getNextPhoto(drive) {
@@ -27,7 +29,7 @@ async function getNextPhoto(drive) {
   });
   const files = response.data.files;
   if (!files || files.length === 0) {
-    console.log("⚠️  Không còn ảnh nào để đăng!");
+    console.log("⚠️  Hết ảnh trong folder rồi! Upload thêm ảnh mới nhé.");
     return null;
   }
   return files[0];
@@ -58,21 +60,19 @@ VỀ DỊCH VỤ (rất quan trọng để hiểu đúng):
 - Đặt lịch qua SĐT 0979979981
 
 Đây là ảnh quá trình cô Lan đang làm cho khách hàng thực tế. Hãy viết một bài đăng Facebook tự nhiên, gồm:
-
-- Mở đầu bằng lời tâm tình của cô Lan (vd: "Hôm nay cô vừa làm xong cho một bạn...", "Có nhiều bạn nhắn hỏi cô...", "Lại thêm một khách hàng tin tưởng cô...")
-- Mô tả ngắn về tình huống/trải nghiệm của khách (dựa vào ảnh)
-- Nhắc đến phương pháp gia truyền: nhẹ nhàng, làm trực tiếp, không xâm lấn
-- Nhấn mạnh: cô làm tại Hà Nội và Quảng Ninh, khách có thể đặt lịch đến trực tiếp
-- Mời khách quan tâm nhắn page hoặc gọi 0979979981 để được tư vấn miễn phí
-- Thêm 5-7 hashtag cuối bài (vd: #taynottruoi #giatruyen #colandepot #notentamruoi #taynottruoihanoi #taynottruoiquangninh)
+- Mở đầu bằng lời tâm tình của cô Lan
+- Mô tả ngắn về trải nghiệm khách (dựa vào ảnh)
+- Nhắc đến phương pháp gia truyền: nhẹ nhàng, làm trực tiếp
+- Nhấn mạnh: cô làm tại Hà Nội và Quảng Ninh
+- Mời khách nhắn page hoặc gọi 0979979981
+- Thêm 5-7 hashtag cuối bài
 
 Yêu cầu:
-- Giọng cô Lan: thân thiện, gần gũi, ấm áp, như người làm nghề lâu năm
+- Giọng cô Lan: thân thiện, ấm áp, như người làm nghề lâu năm
 - Độ dài 100-150 chữ
 - Tiếng Việt tự nhiên miền Bắc
-- KHÔNG dùng từ ngữ tuyệt đối ("100%", "khỏi hoàn toàn")
-- KHÔNG nhắc đến bán thuốc, gửi thuốc, ship hàng
-- KHÔNG đưa ra cam kết y tế, chỉ chia sẻ kinh nghiệm và dịch vụ
+- KHÔNG dùng từ tuyệt đối ("100%", "khỏi hoàn toàn")
+- KHÔNG nhắc bán thuốc, gửi thuốc, ship hàng
 
 Chỉ trả về nội dung bài đăng, không giải thích thêm.`;
 
@@ -85,10 +85,7 @@ Chỉ trả về nội dung bài đăng, không giải thích thêm.`;
         {
           role: "user",
           content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: mimeType, data: imageBase64 },
-            },
+            { type: "image", source: { type: "base64", media_type: mimeType, data: imageBase64 } },
             { type: "text", text: prompt },
           ],
         },
@@ -106,21 +103,24 @@ Chỉ trả về nội dung bài đăng, không giải thích thêm.`;
   return response.data.content[0].text;
 }
 
-async function postToFacebook(imageBuffer, caption) {
-  const formData = new FormData();
-  formData.append("source", imageBuffer, {
-    filename: "photo.jpg",
-    contentType: "image/jpeg",
+// ============================================================
+//  LƯU VÀO GOOGLE SHEET
+// ============================================================
+async function appendToSheet(sheets, photoId, photoName, caption) {
+  const today = new Date().toLocaleDateString("vi-VN", {
+    timeZone: "Asia/Ho_Chi_Minh",
   });
-  formData.append("caption", caption);
-  formData.append("access_token", process.env.PAGE_ACCESS_TOKEN);
+  const imageUrl = `https://drive.google.com/file/d/${photoId}/view`;
+  const thumbnailFormula = `=IMAGE("https://drive.google.com/thumbnail?id=${photoId}&sz=w300")`;
 
-  const response = await axios.post(
-    `https://graph.facebook.com/v19.0/me/photos`,
-    formData,
-    { headers: formData.getHeaders() }
-  );
-  return response.data.id;
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: POST_CONFIG.SHEET_ID,
+    range: "A1",
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[today, photoName, thumbnailFormula, imageUrl, caption, "Chưa đăng"]],
+    },
+  });
 }
 
 async function moveToPosted(drive, fileId) {
@@ -133,13 +133,19 @@ async function moveToPosted(drive, fileId) {
   });
 }
 
+// ============================================================
+//  HÀM CHÍNH
+// ============================================================
 async function runAutoPost() {
-  console.log("🕐 Bắt đầu auto-post...");
+  console.log("🕐 Bắt đầu chuẩn bị bài đăng...");
   try {
-    const drive = getDriveClient();
+    const auth = getAuth();
+    const drive = google.drive({ version: "v3", auth });
+    const sheets = google.sheets({ version: "v4", auth });
+
     const photo = await getNextPhoto(drive);
     if (!photo) return;
-    console.log(`📸 Đang xử lý ảnh: ${photo.name}`);
+    console.log(`📸 Đang xử lý: ${photo.name}`);
 
     const imageBuffer = await downloadPhotoAsBuffer(drive, photo.id);
     console.log("✅ Đã tải ảnh về");
@@ -148,13 +154,14 @@ async function runAutoPost() {
     const caption = await generateCaption(imageBuffer, photo.mimeType);
     console.log(`📝 Caption:\n${caption}\n`);
 
-    const postId = await postToFacebook(imageBuffer, caption);
-    console.log(`🎉 Đã đăng thành công! Post ID: ${postId}`);
+    await appendToSheet(sheets, photo.id, photo.name, caption);
+    console.log("📊 Đã lưu vào Google Sheet");
 
     await moveToPosted(drive, photo.id);
-    console.log("📁 Đã chuyển ảnh vào folder Đã đăng");
+    console.log("📁 Đã chuyển ảnh sang folder Đã chuẩn bị");
+    console.log("🎉 Hoàn tất! Mở Sheet xem caption mới.");
   } catch (err) {
-    console.error("❌ Lỗi auto-post:", err.message);
+    console.error("❌ Lỗi:", err.message);
     if (err.response?.data) {
       console.error("Chi tiết:", JSON.stringify(err.response.data));
     }
@@ -162,7 +169,7 @@ async function runAutoPost() {
 }
 
 function startAutoPost() {
-  console.log(`📅 Auto-post đã bật — đăng lúc 20:00 mỗi ngày`);
+  console.log(`📅 Auto-prepare đã bật — chạy lúc 20:00 mỗi ngày`);
   cron.schedule(POST_CONFIG.CRON_SCHEDULE, runAutoPost, {
     timezone: "Asia/Ho_Chi_Minh",
   });
