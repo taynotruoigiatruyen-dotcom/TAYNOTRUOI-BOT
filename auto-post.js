@@ -6,10 +6,11 @@ const sharp = require("sharp");
 
 const POST_CONFIG = {
   CRON_SCHEDULE: "0 13 * * *", // 20:00 GMT+7
-  PHOTO_FOLDER_ID: process.env.DRIVE_FOLDER_ID, // folder ảnh chưa đăng
-  VIDEO_FOLDER_ID: process.env.DRIVE_VIDEO_FOLDER_ID, // folder video chưa đăng (NEW)
+  PHOTO_FOLDER_ID: process.env.DRIVE_FOLDER_ID,
+  VIDEO_FOLDER_ID: process.env.DRIVE_VIDEO_FOLDER_ID,
   POSTED_FOLDER_ID: process.env.DRIVE_POSTED_FOLDER_ID,
   TEMPLATE_FILE_ID: process.env.DRIVE_TEMPLATE_FILE_ID,
+  COOLDOWN_HOURS: 12, // Cooldown 12 giờ giữa các lần đăng
 };
 
 const PHOTO_AREA = {
@@ -18,6 +19,33 @@ const PHOTO_AREA = {
   width: 1080,
   height: 864,
 };
+
+// ============================================================
+//  COOLDOWN LOCK - Chống spam
+// ============================================================
+let lastPostTimestamp = 0; // milliseconds since epoch
+
+function canPost() {
+  const now = Date.now();
+  const elapsedMs = now - lastPostTimestamp;
+  const cooldownMs = POST_CONFIG.COOLDOWN_HOURS * 60 * 60 * 1000;
+  return elapsedMs >= cooldownMs;
+}
+
+function getCooldownRemaining() {
+  const now = Date.now();
+  const elapsedMs = now - lastPostTimestamp;
+  const cooldownMs = POST_CONFIG.COOLDOWN_HOURS * 60 * 60 * 1000;
+  const remainingMs = cooldownMs - elapsedMs;
+  if (remainingMs <= 0) return "0 phút";
+  const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+  const minutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+  return `${hours}h ${minutes}m`;
+}
+
+function markPosted() {
+  lastPostTimestamp = Date.now();
+}
 
 // ============================================================
 //  CAPTION MẪU CHO ẢNH
@@ -71,7 +99,7 @@ Bí quyết gia truyền của gia đình cô là phương pháp đông y, làm 
 ];
 
 // ============================================================
-//  CAPTION MẪU CHO VIDEO (riêng để phù hợp format video)
+//  CAPTION MẪU CHO VIDEO
 // ============================================================
 const VIDEO_CAPTIONS = [
   `Cùng xem cô Lan làm việc nhé các bạn 🎬
@@ -252,14 +280,12 @@ async function postVideo(drive) {
   const sizeMB = (video.size / 1024 / 1024).toFixed(2);
   console.log(`🎬 Đang xử lý: ${video.name} (${sizeMB} MB)`);
 
-  // Tải video về
   const videoBuffer = await downloadFromDrive(drive, video.id);
   console.log("✅ Đã tải video về");
 
   const caption = getRandomCaption(VIDEO_CAPTIONS);
   console.log(`📝 Caption: ${caption.substring(0, 80)}...`);
 
-  // Upload video lên Facebook
   const formData = new FormData();
   formData.append("source", videoBuffer, {
     filename: video.name,
@@ -285,17 +311,21 @@ async function postVideo(drive) {
 }
 
 // ============================================================
-//  HÀM CHÍNH - QUYẾT ĐỊNH ĐĂNG ẢNH HAY VIDEO
+//  HÀM CHÍNH - CÓ COOLDOWN LOCK
 // ============================================================
 async function runAutoPost() {
   console.log("🕐 Bắt đầu auto-post...");
 
+  // ⛔ KIỂM TRA COOLDOWN TRƯỚC
+  if (!canPost()) {
+    const remaining = getCooldownRemaining();
+    console.log(`🛡️  CHẶN SPAM: Vừa đăng bài rồi, cooldown còn ${remaining}. Bỏ qua lần này.`);
+    return;
+  }
+
   try {
     const drive = getDriveClient();
 
-    // Lịch xen kẽ:
-    // Thứ 2 (1), 4 (3), 6 (5) → đăng ảnh
-    // Thứ 3 (2), 5 (4), 7 (6), CN (0) → đăng video
     const dayOfWeek = new Date(
       new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" })
     ).getDay();
@@ -308,14 +338,12 @@ async function runAutoPost() {
 
     if (isPhotoDay) {
       success = await postPhoto(drive);
-      // Nếu hết ảnh, fallback sang video
       if (!success) {
         console.log("🔄 Hết ảnh, chuyển sang đăng video");
         success = await postVideo(drive);
       }
     } else {
       success = await postVideo(drive);
-      // Nếu hết video, fallback sang ảnh
       if (!success) {
         console.log("🔄 Hết video, chuyển sang đăng ảnh");
         success = await postPhoto(drive);
@@ -324,6 +352,10 @@ async function runAutoPost() {
 
     if (!success) {
       console.log("⚠️  Hết cả ảnh và video! Upload thêm vào Drive nhé.");
+    } else {
+      // ✅ Đăng thành công → đặt cooldown
+      markPosted();
+      console.log(`🛡️  Cooldown ${POST_CONFIG.COOLDOWN_HOURS}h đã kích hoạt`);
     }
   } catch (err) {
     console.error("❌ Lỗi auto-post:", err.message);
@@ -336,6 +368,7 @@ async function runAutoPost() {
 function startAutoPost() {
   console.log(`📅 Auto-post đã bật — đăng lúc 20:00 mỗi ngày`);
   console.log(`📸 Ảnh: T2, T4, T6  |  🎬 Video: T3, T5, T7, CN`);
+  console.log(`🛡️  Cooldown chống spam: ${POST_CONFIG.COOLDOWN_HOURS} giờ`);
   cron.schedule(POST_CONFIG.CRON_SCHEDULE, runAutoPost, {
     timezone: "Asia/Ho_Chi_Minh",
   });
